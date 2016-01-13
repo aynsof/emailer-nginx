@@ -1,0 +1,90 @@
+---
+- hosts: all
+  remote_user: vagrant
+  sudo: yes
+  vars_files:
+    - vars/external_vars.yml
+
+  tasks:
+
+  - name: Create web group
+    group: name=web state=present
+
+  - name: Create nginx user
+    user: name=nginx group=web shell=/sbin/nologin home=/home/nginx
+
+  - name: Apt update
+    apt: update_cache=yes
+
+  - name: Install nginx
+    apt: name=nginx state=latest 
+
+  - name: Install ruby-dev
+    apt: name=ruby-dev state=latest 
+
+  - name: Install bundler
+    apt: name=bundler state=latest 
+
+  - name: Install git
+    apt: name=git state=latest 
+
+  - name: Install libpq
+    apt: name=libpq-dev state=latest 
+
+  - name: Install gems
+    command: gem install unicorn
+    # Gem module isn't installing unicorn; resorting to command module
+    # gem: name=unicorn state=latest
+
+  - name: Update gems
+    command: gem update
+
+  - name: Clone git repository
+    git: repo=git://github.com/aynsof/emailer-app dest=/var/www accept_hostkey=true
+
+  - name: Set permissions on /var/www/
+    file: path=/var/www state=directory owner=nginx group=web recurse=yes
+
+  - name: Create /var/www/config
+    file: path=/var/www/config state=directory owner=nginx group=web recurse=yes
+
+  - name: Create logging directory
+    file: path=/var/log/unicorn state=directory owner=nginx group=web
+
+  - name: Bundle install for Sinatra app
+    command: bundle install chdir=/var/www/
+    sudo: no
+
+  - name: Configure nginx.conf
+    template: src=templates/nginx.conf dest=/etc/nginx/nginx.conf
+
+  - name: Configure nginx default site
+    template: src=templates/sites-enabled-default.conf dest=/etc/nginx/sites-enabled/default
+
+  - name: Configure unicorn.rb
+    template: src=templates/unicorn.rb dest=/var/www/config/unicorn.rb owner=nginx group=web
+
+  - name: Kill all running unicorns; ignore if none exist 
+    command: killall unicorn
+    sudo: yes
+    ignore_errors: yes
+
+  - name: Start unicorn
+    command: unicorn -c /var/www/config/unicorn.rb -D
+    environment:
+      DB_PASSWORD: "{{ db_password }}"
+      DB_IP_ADDR: "{{ db_ip_addr }}"
+    sudo: yes
+    sudo_user: nginx
+
+  - name: Start services
+    command: service nginx restart
+    sudo: yes
+    # Using the service module causes an error; resorting to the command module
+    # service: nginx state=restarted
+
+  - name: Create init.d script
+    template: src=templates/unicornd dest=/etc/init.d/unicornd mode=0755
+
+  - name: Install init.d script
+    command: update-rc.d unicornd defaults
